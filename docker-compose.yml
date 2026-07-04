@@ -1,0 +1,127 @@
+services:
+  # ── Infrastructure ─────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: Mailvex
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [Mailvex]
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass redis_secret --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis_secret", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [Mailvex]
+
+  nats:
+    image: nats:2-alpine
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [Mailvex]
+
+  # ── DB migrate + seed (runs once before api/workers start) ───────────────
+
+  migrate:
+    image: postgres:16-alpine
+    env_file: ./Mailvex-api/.env
+    volumes:
+      - ./Mailvex-api/database/migrations:/migrations:ro
+      - ./infra/migrate.sh:/migrate.sh:ro
+    command: ["sh", "/migrate.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [Mailvex]
+
+  seed:
+    build:
+      context: ./Mailvex-api
+      dockerfile: infra/docker/Dockerfile
+    env_file: ./Mailvex-api/.env
+    command: sh -c "npx tsx database/seeds/index.ts"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [Mailvex]
+
+  # ── API (Node/Fastify) ─────────────────────────────────────────────────────
+
+  api:
+    build:
+      context: ./Mailvex-api
+      dockerfile: infra/docker/Dockerfile
+    ports:
+      - "4000:4000"
+    env_file: ./Mailvex-api/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+    networks: [Mailvex]
+
+  # ── Workers (Go) ──────────────────────────────────────────────────────────
+
+  workers:
+    build:
+      context: ./Mailvex-workers
+      dockerfile: infra/docker/Dockerfile
+    ports:
+      - "9090:9090"
+    env_file: ./Mailvex-workers/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [Mailvex]
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  Mailvex:
+    driver: bridge

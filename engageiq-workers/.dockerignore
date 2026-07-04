@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+!.env.example
+graphify-out
+docs
+test
+scripts
+*.log
+.DS_Store
+.vscode
+.idea

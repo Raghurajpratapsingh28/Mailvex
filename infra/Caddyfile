@@ -1,0 +1,28 @@
+# Caddy automatically provisions and renews Let's Encrypt TLS certificates
+# for every domain listed below. Point the DNS A/AAAA records of each
+# subdomain at this VPS's public IP before starting the stack.
+
+{
+	email {$ACME_EMAIL}
+}
+
+# ── Frontend (Next.js) ───────────────────────────────────────────────────────
+{$APP_DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy frontend:3000 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+	}
+}
+
+# ── API (Fastify) ────────────────────────────────────────────────────────────
+{$API_DOMAIN} {
+	encode zstd gzip
+
+	# Stripe webhooks and normal API traffic all flow through /api/v1/*
+	reverse_proxy api:4000 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+	}
+}
